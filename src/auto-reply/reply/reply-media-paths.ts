@@ -5,7 +5,7 @@ import { resolvePathFromInput, toRelativeWorkspacePath } from "../../agents/path
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { logVerbose } from "../../globals.js";
+import { logWarn } from "../../logger.js";
 import { resolveChannelAccountMediaMaxMb } from "../../media/configured-max-bytes.js";
 import { isPassThroughRemoteMediaSource } from "../../media/media-source-url.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
@@ -18,7 +18,7 @@ const FILE_URL_RE = /^file:\/\//i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const HAS_FILE_EXT_RE = /\.\w{1,10}$/;
-const MANAGED_GLOBAL_MEDIA_SUBDIRS = new Set(["outbound"]);
+const MANAGED_GLOBAL_MEDIA_SUBDIRS = new Set(["inbound", "outbound"]);
 
 function isManagedGlobalReplyMediaPath(candidate: string): boolean {
   const globalMediaRoot = path.join(resolveConfigDir(), "media");
@@ -159,6 +159,10 @@ export function createReplyMediaPathNormalizer(params: {
     if (isPassThroughRemoteMediaSource(media)) {
       return media;
     }
+    // Global media paths are trusted and do not need sandbox validation.
+    if (path.isAbsolute(media) && isManagedGlobalReplyMediaPath(media)) {
+      return await persistLocalReplyMedia(media);
+    }
     const isRelativeLocalMedia =
       isLikelyLocalMediaSource(media) &&
       !FILE_URL_RE.test(media) &&
@@ -211,7 +215,7 @@ export function createReplyMediaPathNormalizer(params: {
       try {
         normalized = await normalizeMediaSource(media);
       } catch (err) {
-        logVerbose(`dropping blocked reply media ${media}: ${String(err)}`);
+        logWarn(`Dropping blocked reply media ${media}: ${String(err)}`);
         continue;
       }
       if (!normalized || seen.has(normalized)) {

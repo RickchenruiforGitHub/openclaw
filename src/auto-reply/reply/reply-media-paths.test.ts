@@ -94,6 +94,25 @@ describe("createReplyMediaPathNormalizer", () => {
     );
   });
 
+  it("keeps managed inbound media under the shared media root", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["/Users/peter/.openclaw/media/inbound/xxx---uuid.jpg"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: "/Users/peter/.openclaw/media/inbound/xxx---uuid.jpg",
+      mediaUrls: ["/Users/peter/.openclaw/media/inbound/xxx---uuid.jpg"],
+    });
+    expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
+  });
+
   it("drops sandbox-mapped media when staging fails instead of retrying the workspace fallback", async () => {
     ensureSandboxWorkspaceForSession.mockResolvedValue({
       workspaceDir: "/tmp/sandboxes/session-1",
@@ -385,5 +404,52 @@ describe("createReplyMediaPathNormalizer", () => {
       groupChannel: undefined,
       groupSpace: undefined,
     });
+  });
+
+  it("stages media in agent session then delivers when telegram session uses different sandbox root (#71138)", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
+
+    // Stage 1: Agent session with sandbox
+    ensureSandboxWorkspaceForSession.mockResolvedValueOnce({
+      workspaceDir: "/Users/peter/.openclaw/sandboxes/agent-session-123",
+      containerWorkdir: "/workspace",
+    });
+
+    const agentNormalizer = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "agent-session-123",
+      workspaceDir: "/Users/peter/.openclaw/workspace",
+    });
+
+    resolveOutboundAttachmentFromUrl.mockResolvedValueOnce({
+      path: "/Users/peter/.openclaw/media/outbound/xxx---uuid.docx",
+      contentType: "application/pdf",
+    });
+
+    const agentResult = await agentNormalizer({
+      mediaUrls: ["file:///workspace/exported/report.docx"],
+    });
+
+    expect(agentResult.mediaUrl).toBe("/Users/peter/.openclaw/media/outbound/xxx---uuid.docx");
+
+    // Stage 2: Telegram session with different sandbox (the bug trigger)
+    ensureSandboxWorkspaceForSession.mockResolvedValueOnce({
+      workspaceDir: "/Users/peter/.openclaw/sandboxes/telegram-chat-456",
+      containerWorkdir: "/workspace",
+    });
+
+    const telegramNormalizer = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "telegram-chat-456",
+      workspaceDir: "/Users/peter/.openclaw/workspace",
+    });
+
+    const telegramResult = await telegramNormalizer({
+      mediaUrls: ["/Users/peter/.openclaw/media/outbound/xxx---uuid.docx"],
+    });
+
+    // After fix: should deliver instead of silently dropping
+    expect(telegramResult.mediaUrl).toBe("/Users/peter/.openclaw/media/outbound/xxx---uuid.docx");
+    expect(resolveOutboundAttachmentFromUrl).toHaveBeenCalledTimes(1);
   });
 });
